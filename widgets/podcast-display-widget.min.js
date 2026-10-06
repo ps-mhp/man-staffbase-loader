@@ -118,10 +118,26 @@
     return res;
   }
 
+  // Alle Kopien auf einer Seite teilen sich eine Anfrage an widgets.json;
+  // schlägt sie fehl, versucht es die nächste Kopie neu.
+  const SHARED_LISTS = "__manLoaderWidgetLists";
+  function widgetList(deps, url) {
+    const lists = (deps.shared[SHARED_LISTS] = deps.shared[SHARED_LISTS] || {});
+    if (!lists[url]) {
+      lists[url] = fetchOk(deps, url)
+        .then((res) => res.json())
+        .catch((error) => {
+          delete lists[url];
+          throw error;
+        });
+    }
+    return lists[url];
+  }
+
   async function loadWidget(name, deps) {
     const list = WIDGET_LISTS[deps.host];
     if (!list) throw new Error(`keine widgets.json für ${deps.host}`);
-    const entries = await (await fetchOk(deps, list)).json();
+    const entries = await widgetList(deps, list);
     const entry = Array.isArray(entries) ? entries.find((item) => item && item.name === name) : null;
     if (!entry) throw new Error(`${name} steht nicht in widgets.json`);
     if (!isOwnMedia(entry.src, deps.origin)) throw new Error(`${name}: src nicht unter ${ALLOWED_PATH} dieser Instanz: ${entry.src}`);
@@ -162,6 +178,7 @@
     get document() {
       return document;
     },
+    shared: window,
     fetch: (...args) => window.fetch(...args),
     execute: executeInBrowser,
     log: console,
