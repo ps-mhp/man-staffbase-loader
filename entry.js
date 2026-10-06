@@ -16,18 +16,30 @@
  *
  * Eine feste Datei auf GitHub Pages (echter JS-Typ, als `<script src>`
  * ladbar), die in Staffbase registriert wird. Was sie lädt, steht allein in
- * ihrer Adresse — alles nach `?src=` ist die Adresse einer Staffbase-Datei:
+ * ihrer Adresse:
  *
+ *   …/entry.js?widget=table-widget
  *   …/entry.js?src=/api/media/secure/external/v2/raw/upload/<id>.js?accessorId=…&media_token=…
  *
- * Die Medien-URL darf unverändert angehängt werden, mit ihrem eigenen `?` und
- * `&`; URL-kodiert geht es auch. Zugelassen sind nur Dateien der eigenen
- * Instanz unter `/api/media/` — sonst wäre diese Datei ein Lader für
- * beliebigen fremden Code.
+ * `?widget=` lädt das Bündel eines Widgets aus der Collection „Public Area“:
+ * welche Datei das ist, steht in der veröffentlichten `widgets.json` der
+ * Instanz (dieselbe, die der Widget-Loader auf öffentlichen Seiten liest). So
+ * bleibt die registrierte Adresse — und damit jeder Content-Designer-Block,
+ * der sie speichert — gleich, auch wenn ein Release das Bündel in Staffbase
+ * neu hochladen muss und es dabei eine neue Adresse bekommt. Nachgeladene
+ * Teile (`<widget>.<n>.js`) kommen weiter von Pages; dafür steht wie beim
+ * Widget-Loader ein Marker `<script type="text/plain" src="<pages>">` im Kopf
+ * (src/shared/public-path.ts).
+ *
+ * `?src=` lädt eine einzelne Staffbase-Datei. Die Medien-URL darf unverändert
+ * angehängt werden, mit ihrem eigenen `?` und `&`; URL-kodiert geht es auch.
+ *
+ * Zugelassen sind nur Dateien der eigenen Instanz unter `/api/media/` und
+ * Pages-Adressen unter der eigenen Pages-Domain — sonst wäre diese Datei ein
+ * Lader für beliebigen fremden Code.
  *
  * Staffbase liefert JS-Dateien als `text/plain` mit `nosniff` aus; die Datei
- * wird deshalb per `fetch` geholt und über einen Blob ausgeführt, in einer
- * eigenen Funktion wie früher unter `eval`.
+ * wird deshalb per `fetch` geholt und über einen Blob ausgeführt.
  *
  * `document.currentScript` gibt es nur, solange ein klassisches Skript
  * synchron läuft — deshalb wird es gleich zu Beginn gelesen.
@@ -43,6 +55,24 @@
 })(function () {
   const MARK = "?src=";
   const ALLOWED_PATH = "/api/media/";
+  const PAGES_PREFIX = "https://ps-mhp.github.io/";
+
+  // Die veröffentlichte `widgets.json` je Instanz (Collection „Public Area“,
+  // geschrieben von scripts/publish-widgets-json.mjs).
+  const TRUCK_WIDGETS_JSON =
+    "/api/media/secure/external/v2/raw/upload/11be4030700d88b4da072a6a979bef6e.json?accessorId=branch_6891d4e0aec53f55e3a819ac&media_token=qPoxo9uXdP1Rho5wrf5uH33pZhD3b8YbLj%2BV09y6NSM%3D";
+  const WIDGET_LISTS = {
+    "www.mti.man": TRUCK_WIDGETS_JSON,
+    "www.onetruck.man": TRUCK_WIDGETS_JSON,
+  };
+
+  /** Ob `value` eine Datei der eigenen Instanz unter /api/media/ ist. */
+  function isOwnMedia(value, origin) {
+    if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) return false;
+    // Aufgelöst prüfen, damit `/api/media/../…` nicht hinausführt.
+    const resolved = new URL(value, origin);
+    return resolved.origin === origin && resolved.pathname.startsWith(ALLOWED_PATH);
+  }
 
   /** Der Pfad der Staffbase-Datei aus der eigenen Adresse, oder null. */
   function mediaPath(scriptSrc, origin) {
@@ -50,11 +80,48 @@
     if (at < 0) return null;
     let value = scriptSrc.slice(at + MARK.length);
     if (/^%2f/i.test(value)) value = decodeURIComponent(value);
-    if (!value.startsWith("/") || value.startsWith("//")) return null;
-    // Aufgelöst prüfen, damit `/api/media/../…` nicht hinausführt.
-    const resolved = new URL(value, origin);
-    if (resolved.origin !== origin || !resolved.pathname.startsWith(ALLOWED_PATH)) return null;
-    return value;
+    return isOwnMedia(value, origin) ? value : null;
+  }
+
+  /** Der Widget-Name aus `?widget=`, oder null. */
+  function widgetName(scriptSrc) {
+    const name = new URL(scriptSrc).searchParams.get("widget");
+    return name && /^[a-z0-9-]+$/.test(name) ? name : null;
+  }
+
+  function addMarker(doc, pages) {
+    const exists = [...doc.querySelectorAll("script[data-man-widget-base]")].some((script) => script.src === pages);
+    if (exists) return;
+    const marker = doc.createElement("script");
+    marker.type = "text/plain";
+    marker.dataset.manWidgetBase = "";
+    marker.src = pages;
+    doc.head.appendChild(marker);
+  }
+
+  async function fetchOk(deps, url) {
+    const res = await deps.fetch(url, { credentials: "same-origin" });
+    if (!res.ok) throw new Error(`${url.split("?")[0]}: HTTP ${res.status}`);
+    return res;
+  }
+
+  async function loadWidget(name, deps) {
+    const list = WIDGET_LISTS[deps.host];
+    if (!list) throw new Error(`keine widgets.json für ${deps.host}`);
+    const entries = await (await fetchOk(deps, list)).json();
+    const entry = Array.isArray(entries) ? entries.find((item) => item && item.name === name) : null;
+    if (!entry) throw new Error(`${name} steht nicht in widgets.json`);
+    if (!isOwnMedia(entry.src, deps.origin)) throw new Error(`${name}: src nicht unter ${ALLOWED_PATH} dieser Instanz: ${entry.src}`);
+    if (typeof entry.pages !== "string" || !entry.pages.startsWith(PAGES_PREFIX)) throw new Error(`${name}: pages nicht unter ${PAGES_PREFIX}: ${entry.pages}`);
+    const code = await (await fetchOk(deps, entry.src)).text();
+    addMarker(deps.document, entry.pages);
+    await deps.execute(`${code}\n//# sourceURL=${name}.js`);
+  }
+
+  async function loadMedia(path, deps) {
+    const code = await (await fetchOk(deps, path)).text();
+    const name = path.split("?")[0].split("/").pop();
+    await deps.execute(`(function () {\n${code}\n}).call(window);\n//# sourceURL=${name}`);
   }
 
   async function executeInBrowser(source) {
@@ -76,6 +143,12 @@
     get origin() {
       return location.origin;
     },
+    get host() {
+      return location.hostname;
+    },
+    get document() {
+      return document;
+    },
     fetch: (...args) => window.fetch(...args),
     execute: executeInBrowser,
     log: console,
@@ -86,21 +159,18 @@
       deps.log.error("[man-loader] Einstieg: kein document.currentScript — als klassisches <script src> laden");
       return;
     }
-    const path = mediaPath(script.src, deps.origin);
-    if (!path) {
-      deps.log.error(`[man-loader] Einstieg: ?src= fehlt oder zeigt nicht auf ${ALLOWED_PATH} dieser Instanz: ${script.src}`);
+    const widget = widgetName(script.src);
+    const path = widget ? null : mediaPath(script.src, deps.origin);
+    if (!widget && !path) {
+      deps.log.error(`[man-loader] Einstieg: weder ?widget= noch ?src= auf ${ALLOWED_PATH} dieser Instanz: ${script.src}`);
       return;
     }
     try {
-      const res = await deps.fetch(path, { credentials: "same-origin" });
-      if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
-      const code = await res.text();
-      const name = path.split("?")[0].split("/").pop();
-      await deps.execute(`(function () {\n${code}\n}).call(window);\n//# sourceURL=${name}`);
+      await (widget ? loadWidget(widget, deps) : loadMedia(path, deps));
     } catch (error) {
-      deps.log.error("[man-loader] Einstieg:", error);
+      deps.log.error(`[man-loader] Einstieg${widget ? ` ${widget}` : ""}:`, error);
     }
   }
 
-  return { mediaPath, run };
+  return { WIDGET_LISTS, mediaPath, widgetName, run };
 });
