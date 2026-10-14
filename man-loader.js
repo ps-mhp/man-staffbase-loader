@@ -42,11 +42,23 @@
     api.start();
   }
 })(function () {
-  const VERSION = "1.3.0";
-  // Die veröffentlichte Adresse (`media_token`): sie gilt auch auf öffentlichen
-  // Seiten ohne Sitzung und bleibt beim Ersetzen der Datei dieselbe.
-  const REGISTRY_URL =
+  const VERSION = "1.4.0";
+  // Die veröffentlichte Adresse (`media_token`) der Registry je Instanz: sie
+  // gilt auch auf öffentlichen Seiten ohne Sitzung und bleibt beim Ersetzen
+  // der Datei dieselbe. Diese Datei liegt einmal auf GitHub Pages und bedient
+  // jede Instanz — deshalb eine Zuordnung über den Hostnamen. Die Liste muss
+  // zu instances.json passen (src/loader/instances.test.js).
+  const TRUCK_REGISTRY =
     "/api/media/secure/external/v2/raw/upload/81fd451d19ca3289dcc4db6a821713b2.js?accessorId=branch_6891d4e0aec53f55e3a819ac&media_token=lisEtCwZcnXmf%2BEEEdAqDpBAnDEeJJqowB7MYNoLOZU%3D";
+  const VAN_REGISTRY =
+    "/api/media/secure/external/v2/raw/upload/678a1f25a3baef67bc7fa2d19fd27485.js?accessorId=branch_6a4fb6ddeb0ceb5fff442019&media_token=%2FFVrudaarMGaLMZAPdPAVvtZI6DTmlO2sqxfaItx6mk%3D";
+  const REGISTRIES = {
+    "www.mti.man": TRUCK_REGISTRY,
+    "www.onetruck.man": TRUCK_REGISTRY,
+    "www.svp.man": VAN_REGISTRY,
+  };
+
+  const registryUrl = (host) => REGISTRIES[host] || null;
   const PREFIX = "man-loader";
   const RULE_TIMEOUT_MS = 5000;
 
@@ -256,8 +268,10 @@
   }
 
   async function loadRegistryInBrowser() {
-    const res = await window.fetch(REGISTRY_URL, { credentials: "same-origin" });
-    if (!res.ok) throw new Error(`${REGISTRY_URL}: HTTP ${res.status}`);
+    const url = registryUrl(location.hostname);
+    if (!url) throw new Error(`keine Registry für ${location.hostname} — Host in REGISTRIES eintragen`);
+    const res = await window.fetch(url, { credentials: "same-origin" });
+    if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
     const registry = await executeInBrowser(`${await res.text()}\n//# sourceURL=loader.js`, "module");
     return registry.default;
   }
@@ -295,5 +309,5 @@
     loader.start();
   }
 
-  return { VERSION, REGISTRY_URL, createLoader, normalize, wrapClassic, start };
+  return { VERSION, REGISTRIES, registryUrl, createLoader, normalize, wrapClassic, start };
 });
