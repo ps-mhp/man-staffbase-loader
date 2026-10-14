@@ -63,9 +63,12 @@
   // geschrieben von scripts/publish-widgets-json.mjs).
   const TRUCK_WIDGETS_JSON =
     "/api/media/secure/external/v2/raw/upload/11be4030700d88b4da072a6a979bef6e.json?accessorId=branch_6891d4e0aec53f55e3a819ac&media_token=qPoxo9uXdP1Rho5wrf5uH33pZhD3b8YbLj%2BV09y6NSM%3D";
+  const VAN_WIDGETS_JSON =
+    "/api/media/secure/external/v2/raw/upload/fc2c6283027cdabc2a1ab23ed015c6c0.json?accessorId=branch_6a4fb6ddeb0ceb5fff442019&media_token=dV2G49N3XFVIRJBU1h7EkUdwfnJmbyGTVyeOXwqF970%3D";
   const WIDGET_LISTS = {
     "www.mti.man": TRUCK_WIDGETS_JSON,
     "www.onetruck.man": TRUCK_WIDGETS_JSON,
+    "www.svp.man": VAN_WIDGETS_JSON,
   };
 
   /** Ob `value` eine Datei der eigenen Instanz unter /api/media/ ist. */
@@ -167,7 +170,9 @@
     get document() {
       return document;
     },
-    shared: window,
+    get shared() {
+      return window;
+    },
     fetch: (...args) => window.fetch(...args),
     execute: executeInBrowser,
     log: console,
