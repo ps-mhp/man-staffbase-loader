@@ -104,8 +104,49 @@
     doc.head.appendChild(marker);
   }
 
+  /**
+   * Hostname und Ursprung des Dokuments, auch in einem Rahmen ohne eigene
+   * Adresse.
+   *
+   * Staffbase lädt dieses Skript beim Anmelden eines Blocks in einem iframe
+   * ohne eigene Adresse (`about:blank`, `srcdoc`), um die Blockdefinition
+   * auszulesen. Ein solches Dokument erbt zwar den Ursprung der Elternseite,
+   * seine eigene Adresse hat aber keinen Hostnamen: `location.hostname` ist
+   * leer und `location.origin` die Zeichenkette "null". Dann zählt die
+   * nächste Ebene nach oben, die eine eigene Adresse hat — erreichbar, weil
+   * der geerbte Ursprung derselbe ist.
+   *
+   * Beide Werte stammen immer aus demselben Rahmen, damit `host` und
+   * `origin` nicht auseinanderlaufen.
+   */
+  function resolveHost(win) {
+    for (let frame = win, depth = 0; frame && depth < 20; depth += 1) {
+      let here;
+      // Ein Rahmen fremden Ursprungs wirft — dann ist oben Schluss.
+      try {
+        here = frame.location;
+      } catch (error) {
+        break;
+      }
+      if (here && here.hostname) return { host: here.hostname, origin: here.origin };
+      const up = frame.parent;
+      if (!up || up === frame) break;
+      frame = up;
+    }
+    // Letzter Ausweg: die Seite, die diesen Rahmen erzeugt hat.
+    try {
+      const referrer = new URL(win.document.referrer);
+      if (referrer.hostname) return { host: referrer.hostname, origin: referrer.origin };
+    } catch (error) {
+      /* kein oder unbrauchbarer Verweis */
+    }
+    return { host: "", origin: win.location.origin };
+  }
+
   async function fetchOk(deps, url) {
-    const res = await deps.fetch(url, { credentials: "same-origin" });
+    // Ein Rahmen ohne eigene Adresse löst `/api/media/…` nicht zuverlässig
+    // gegen die Instanz auf — deshalb mit dem ermittelten Ursprung anfragen.
+    const res = await deps.fetch(url.startsWith("/") ? new URL(url, deps.origin).href : url, { credentials: "same-origin" });
     if (!res.ok) throw new Error(`${url.split("?")[0]}: HTTP ${res.status}`);
     return res;
   }
@@ -128,7 +169,7 @@
 
   async function loadWidget(name, deps) {
     const list = WIDGET_LISTS[deps.host];
-    if (!list) throw new Error(`keine widgets.json für ${deps.host}`);
+    if (!list) throw new Error(`keine widgets.json für ${deps.host || "diesen Rahmen — kein Hostname ermittelbar"}`);
     const entries = await widgetList(deps, list);
     const entry = Array.isArray(entries) ? entries.find((item) => item && item.name === name) : null;
     if (!entry) throw new Error(`${name} steht nicht in widgets.json`);
@@ -162,10 +203,10 @@
 
   const browser = {
     get origin() {
-      return location.origin;
+      return resolveHost(window).origin;
     },
     get host() {
-      return location.hostname;
+      return resolveHost(window).host;
     },
     get document() {
       return document;
@@ -196,5 +237,5 @@
     }
   }
 
-  return { WIDGET_LISTS, mediaPath, widgetName, run };
+  return { WIDGET_LISTS, mediaPath, widgetName, resolveHost, run };
 });
